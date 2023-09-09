@@ -1862,17 +1862,19 @@ inline void sapp_run(const sapp_desc& desc) { return sapp_run(&desc); }
     #endif
     #define _SAPP_APPLE (1)
     #include <TargetConditionals.h>
-    #if defined(TARGET_OS_IPHONE) && !TARGET_OS_IPHONE
+    #if defined(TARGET_OS_VISION)
+        #define _SAPP_VISIONOS (1)
+    #elif defined(TARGET_OS_IPHONE) && !TARGET_OS_IPHONE
         /* MacOS */
         #define _SAPP_MACOS (1)
         #if !defined(SOKOL_METAL) && !defined(SOKOL_GLCORE33)
-        #error("sokol_app.h: unknown 3D API selected for MacOS, must be SOKOL_METAL or SOKOL_GLCORE33")
+            #error("sokol_app.h: unknown 3D API selected for MacOS, must be SOKOL_METAL or SOKOL_GLCORE33")
         #endif
     #else
         /* iOS or iOS Simulator */
         #define _SAPP_IOS (1)
         #if !defined(SOKOL_METAL) && !defined(SOKOL_GLES3)
-        #error("sokol_app.h: unknown 3D API selected for iOS, must be SOKOL_METAL or SOKOL_GLES3")
+            #error("sokol_app.h: unknown 3D API selected for iOS, must be SOKOL_METAL or SOKOL_GLES3")
         #endif
     #endif
 #elif defined(__EMSCRIPTEN__)
@@ -10972,6 +10974,8 @@ SOKOL_API_IMPL void sapp_run(const sapp_desc* desc) {
         _sapp_win32_run(desc);
     #elif defined(_SAPP_LINUX)
         _sapp_linux_run(desc);
+    #elif defined(_SAPP_VISIONOS)
+        ;
     #else
     #error "sapp_run() not supported on this platform"
     #endif
@@ -11333,7 +11337,7 @@ SOKOL_API_IMPL void sapp_html5_fetch_dropped_file(const sapp_html5_fetch_request
 
 SOKOL_API_IMPL const void* sapp_metal_get_device(void) {
     SOKOL_ASSERT(_sapp.valid);
-    #if defined(SOKOL_METAL)
+    #if defined(SOKOL_METAL) && !defined(_SAPP_VISIONOS)
         #if defined(_SAPP_MACOS)
             const void* obj = (__bridge const void*) _sapp.macos.mtl_device;
         #else
@@ -11348,7 +11352,7 @@ SOKOL_API_IMPL const void* sapp_metal_get_device(void) {
 
 SOKOL_API_IMPL const void* sapp_metal_get_renderpass_descriptor(void) {
     SOKOL_ASSERT(_sapp.valid);
-    #if defined(SOKOL_METAL)
+    #if defined(SOKOL_METAL) && !defined(_SAPP_VISIONOS)
         #if defined(_SAPP_MACOS)
             const void* obj = (__bridge const void*) [_sapp.macos.view currentRenderPassDescriptor];
         #else
@@ -11363,7 +11367,7 @@ SOKOL_API_IMPL const void* sapp_metal_get_renderpass_descriptor(void) {
 
 SOKOL_API_IMPL const void* sapp_metal_get_drawable(void) {
     SOKOL_ASSERT(_sapp.valid);
-    #if defined(SOKOL_METAL)
+    #if defined(SOKOL_METAL) && !defined(_SAPP_VISIONOS)
         #if defined(_SAPP_MACOS)
             const void* obj = (__bridge const void*) [_sapp.macos.view currentDrawable];
         #else
