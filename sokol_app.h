@@ -951,9 +951,11 @@
 
     OPTIONAL: DON'T HIJACK main() (#define SOKOL_NO_ENTRY)
     ======================================================
+    NOTE: SOKOL_NO_ENTRY and sapp_run() is currently not supported on Android.
+
     In its default configuration, sokol_app.h "hijacks" the platform's
     standard main() function. This was done because different platforms
-    have different main functions which are not compatible with
+    have different entry point conventions which are not compatible with
     C's main() (for instance WinMain on Windows has completely different
     arguments). However, this "main hijacking" posed a problem for
     usage scenarios like integrating sokol_app.h with other languages than
@@ -965,12 +967,30 @@
     - instead provide the standard main() function of the platform
     - from the main function, call the function ```sapp_run()``` which
       takes a pointer to an ```sapp_desc``` structure.
-    - ```sapp_run()``` takes over control and calls the provided init-, frame-,
-      shutdown- and event-callbacks just like in the default model, it
-      will only return when the application quits (or not at all on some
-      platforms, like emscripten)
+    - from here on```sapp_run()``` takes over control and calls the provided
+      init-, frame-, event- and cleanup-callbacks just like in the default model.
 
-    NOTE: SOKOL_NO_ENTRY is currently not supported on Android.
+    sapp_run() behaves differently across platforms:
+
+        - on some platforms, sapp_run() will return when the application quits
+        - on other platforms, sapp_run() will never return, even when the
+          application quits (the operating system is free to simply terminate
+          the application at any time)
+        - on Emscripten specifically, sapp_run() will return immediately while
+          the frame callback keeps being called
+
+    This different behaviour of sapp_run() essentially means that there shouldn't
+    be any code *after* sapp_run(), because that may either never be called, or in
+    case of Emscripten will be called at an unexpected time (at application start).
+
+    An application also should not depend on the cleanup-callback being called
+    when cross-platform compatibility is required.
+
+    Since sapp_run() returns immediately on Emscripten you shouldn't activate
+    the 'EXIT_RUNTIME' linker option (this is disabled by default when compiling
+    for the browser target), since the C/C++ exit runtime would be called immediately at
+    application start, causing any global objects to be destroyed and global
+    variables to be zeroed.
 
     WINDOWS CONSOLE OUTPUT
     ======================
@@ -1019,8 +1039,8 @@
             return (sapp_desc){
                 // ...
                 .allocator = {
-                    .alloc = my_alloc,
-                    .free = my_free,
+                    .alloc_fn = my_alloc,
+                    .free_fn = my_free,
                     .user_data = ...,
                 }
             };
@@ -1473,12 +1493,12 @@ typedef struct sapp_icon_desc {
 
     Used in sapp_desc to provide custom memory-alloc and -free functions
     to sokol_app.h. If memory management should be overridden, both the
-    alloc and free function must be provided (e.g. it's not valid to
+    alloc_fb and free_fn function must be provided (e.g. it's not valid to
     override one function but not the other).
 */
 typedef struct sapp_allocator {
-    void* (*alloc)(size_t size, void* user_data);
-    void (*free)(void* ptr, void* user_data);
+    void* (*alloc_fn)(size_t size, void* user_data);
+    void (*free_fn)(void* ptr, void* user_data);
     void* user_data;
 } sapp_allocator;
 
@@ -2844,10 +2864,9 @@ _SOKOL_PRIVATE void _sapp_clear(void* ptr, size_t size) {
 _SOKOL_PRIVATE void* _sapp_malloc(size_t size) {
     SOKOL_ASSERT(size > 0);
     void* ptr;
-    if (_sapp.desc.allocator.alloc) {
-        ptr = _sapp.desc.allocator.alloc(size, _sapp.desc.allocator.user_data);
-    }
-    else {
+    if (_sapp.desc.allocator.alloc_fn) {
+        ptr = _sapp.desc.allocator.alloc_fn(size, _sapp.desc.allocator.user_data);
+    } else {
         ptr = malloc(size);
     }
     if (0 == ptr) {
@@ -2863,8 +2882,8 @@ _SOKOL_PRIVATE void* _sapp_malloc_clear(size_t size) {
 }
 
 _SOKOL_PRIVATE void _sapp_free(void* ptr) {
-    if (_sapp.desc.allocator.free) {
-        _sapp.desc.allocator.free(ptr, _sapp.desc.allocator.user_data);
+    if (_sapp.desc.allocator.free_fn) {
+        _sapp.desc.allocator.free_fn(ptr, _sapp.desc.allocator.user_data);
     }
     else {
         free(ptr);
@@ -2968,7 +2987,7 @@ _SOKOL_PRIVATE bool _sapp_strcpy(const char* src, char* dst, int max_len) {
 }
 
 _SOKOL_PRIVATE sapp_desc _sapp_desc_defaults(const sapp_desc* desc) {
-    SOKOL_ASSERT((desc->allocator.alloc && desc->allocator.free) || (!desc->allocator.alloc && !desc->allocator.free));
+    SOKOL_ASSERT((desc->allocator.alloc_fn && desc->allocator.free_fn) || (!desc->allocator.alloc_fn && !desc->allocator.free_fn));
     sapp_desc res = *desc;
     res.sample_count = _sapp_def(res.sample_count, 1);
     res.swap_interval = _sapp_def(res.swap_interval, 1);

@@ -939,8 +939,8 @@
             sg_setup(&(sg_desc){
                 // ...
                 .allocator = {
-                    .alloc = my_alloc,
-                    .free = my_free,
+                    .alloc_fn = my_alloc,
+                    .free_fn = my_free,
                     .user_data = ...,
                 }
             });
@@ -2894,7 +2894,10 @@ typedef struct sg_pass_info {
     _SG_LOGITEM_XMACRO(D3D11_MAP_FOR_UPDATE_BUFFER_FAILED, "Map() failed when updating buffer (d3d11)") \
     _SG_LOGITEM_XMACRO(D3D11_MAP_FOR_APPEND_BUFFER_FAILED, "Map() failed when appending to buffer (d3d11)") \
     _SG_LOGITEM_XMACRO(D3D11_MAP_FOR_UPDATE_IMAGE_FAILED, "Map() failed when updating image (d3d11)") \
+    _SG_LOGITEM_XMACRO(METAL_CREATE_BUFFER_FAILED, "failed to create buffer object (metal)") \
     _SG_LOGITEM_XMACRO(METAL_TEXTURE_FORMAT_NOT_SUPPORTED, "pixel format not supported for texture (metal)") \
+    _SG_LOGITEM_XMACRO(METAL_CREATE_TEXTURE_FAILED, "failed to create texture object (metal)") \
+    _SG_LOGITEM_XMACRO(METAL_CREATE_SAMPLER_FAILED, "failed to create sampler object (metal)") \
     _SG_LOGITEM_XMACRO(METAL_SHADER_COMPILATION_FAILED, "shader compilation failed (metal)") \
     _SG_LOGITEM_XMACRO(METAL_SHADER_CREATION_FAILED, "shader creation failed (metal)") \
     _SG_LOGITEM_XMACRO(METAL_SHADER_COMPILATION_OUTPUT, "") \
@@ -2902,6 +2905,7 @@ typedef struct sg_pass_info {
     _SG_LOGITEM_XMACRO(METAL_FRAGMENT_SHADER_ENTRY_NOT_FOUND, "fragment shader entry not found (metal)") \
     _SG_LOGITEM_XMACRO(METAL_CREATE_RPS_FAILED, "failed to create render pipeline state (metal)") \
     _SG_LOGITEM_XMACRO(METAL_CREATE_RPS_OUTPUT, "") \
+    _SG_LOGITEM_XMACRO(METAL_CREATE_DSS_FAILED, "failed to create depth stencil state (metal)") \
     _SG_LOGITEM_XMACRO(WGPU_MAP_UNIFORM_BUFFER_FAILED, "mapping uniform buffer failed (wgpu)") \
     _SG_LOGITEM_XMACRO(WGPU_STAGING_BUFFER_FULL_COPY_TO_BUFFER, "per frame staging buffer full when copying to buffer (wgpu)") \
     _SG_LOGITEM_XMACRO(WGPU_STAGING_BUFFER_FULL_COPY_TO_TEXTURE, "per frame staging buffer full when copying to texture (wgpu)") \
@@ -3082,7 +3086,7 @@ typedef struct sg_pass_info {
     _SG_LOGITEM_XMACRO(VALIDATE_ABND_FS_IMG_SMP_MIPMAPS, "sg_apply_bindings: image bound to fragment stage has mipmap_count == 1, but associated sampler mipmap filer is not SG_MIPMAPFILTER_NONE") \
     _SG_LOGITEM_XMACRO(VALIDATE_AUB_NO_PIPELINE, "sg_apply_uniforms: must be called after sg_apply_pipeline()") \
     _SG_LOGITEM_XMACRO(VALIDATE_AUB_NO_UB_AT_SLOT, "sg_apply_uniforms: no uniform block declaration at this shader stage UB slot") \
-    _SG_LOGITEM_XMACRO(VALIDATE_AUB_SIZE, "sg_apply_uniforms: data size exceeds declared uniform block size") \
+    _SG_LOGITEM_XMACRO(VALIDATE_AUB_SIZE, "sg_apply_uniforms: data size doesn't match declared uniform block size") \
     _SG_LOGITEM_XMACRO(VALIDATE_UPDATEBUF_USAGE, "sg_update_buffer: cannot update immutable buffer") \
     _SG_LOGITEM_XMACRO(VALIDATE_UPDATEBUF_SIZE, "sg_update_buffer: update size is bigger than buffer size") \
     _SG_LOGITEM_XMACRO(VALIDATE_UPDATEBUF_ONCE, "sg_update_buffer: only one update allowed per buffer and frame") \
@@ -3127,8 +3131,8 @@ typedef enum sg_log_item {
     .max_commit_listeners   1024
     .disable_validation     false
 
-    .allocator.alloc        0 (in this case, malloc() will be called)
-    .allocator.free         0 (in this case, free() will be called)
+    .allocator.alloc_fn     0 (in this case, malloc() will be called)
+    .allocator.free_fn      0 (in this case, free() will be called)
     .allocator.user_data    0
 
     .context.color_format: default value depends on selected backend:
@@ -3241,6 +3245,12 @@ typedef struct sg_wgpu_context_desc {
     void* user_data;
 } sg_wgpu_context_desc;
 
+typedef struct sg_gl_context_desc {
+    uint32_t (*default_framebuffer_cb)(void);
+    uint32_t (*default_framebuffer_userdata_cb)(void*);
+    void* user_data;
+} sg_gl_context_desc;
+
 typedef struct sg_context_desc {
     sg_pixel_format color_format;
     sg_pixel_format depth_format;
@@ -3248,6 +3258,7 @@ typedef struct sg_context_desc {
     sg_metal_context_desc metal;
     sg_d3d11_context_desc d3d11;
     sg_wgpu_context_desc wgpu;
+    sg_gl_context_desc gl;
 } sg_context_desc;
 
 /*
@@ -3269,12 +3280,12 @@ typedef struct sg_commit_listener {
 
     Used in sg_desc to provide custom memory-alloc and -free functions
     to sokol_gfx.h. If memory management should be overridden, both the
-    alloc and free function must be provided (e.g. it's not valid to
+    alloc_fn and free_fn function must be provided (e.g. it's not valid to
     override one function but not the other).
 */
 typedef struct sg_allocator {
-    void* (*alloc)(size_t size, void* user_data);
-    void (*free)(void* ptr, void* user_data);
+    void* (*alloc_fn)(size_t size, void* user_data);
+    void (*free_fn)(void* ptr, void* user_data);
     void* user_data;
 } sg_allocator;
 
@@ -4765,8 +4776,7 @@ typedef struct {
 
 typedef struct {
     bool valid;
-    bool has_unified_memory;
-    bool force_managed_storage_mode;
+    bool use_shared_storage_mode;
     const void*(*renderpass_descriptor_cb)(void);
     const void*(*renderpass_descriptor_userdata_cb)(void*);
     const void*(*drawable_cb)(void);
@@ -5057,8 +5067,8 @@ _SOKOL_PRIVATE void _sg_clear(void* ptr, size_t size) {
 _SOKOL_PRIVATE void* _sg_malloc(size_t size) {
     SOKOL_ASSERT(size > 0);
     void* ptr;
-    if (_sg.desc.allocator.alloc) {
-        ptr = _sg.desc.allocator.alloc(size, _sg.desc.allocator.user_data);
+    if (_sg.desc.allocator.alloc_fn) {
+        ptr = _sg.desc.allocator.alloc_fn(size, _sg.desc.allocator.user_data);
     } else {
         ptr = malloc(size);
     }
@@ -5075,8 +5085,8 @@ _SOKOL_PRIVATE void* _sg_malloc_clear(size_t size) {
 }
 
 _SOKOL_PRIVATE void _sg_free(void* ptr) {
-    if (_sg.desc.allocator.free) {
-        _sg.desc.allocator.free(ptr, _sg.desc.allocator.user_data);
+    if (_sg.desc.allocator.free_fn) {
+        _sg.desc.allocator.free_fn(ptr, _sg.desc.allocator.user_data);
     } else {
         free(ptr);
     }
@@ -7033,6 +7043,8 @@ _SOKOL_PRIVATE void _sg_gl_reset_state_cache(void) {
 
 _SOKOL_PRIVATE void _sg_gl_setup_backend(const sg_desc* desc) {
     _SOKOL_UNUSED(desc);
+    SOKOL_ASSERT(desc->context.gl.default_framebuffer_cb == 0 || desc->context.gl.default_framebuffer_userdata_cb == 0);
+
     // assumes that _sg.gl is already zero-initialized
     _sg.gl.valid = true;
 
@@ -7523,11 +7535,13 @@ _SOKOL_PRIVATE void _sg_gl_fb_attach_texture(const _sg_gl_attachment_t* gl_att, 
     SOKOL_ASSERT(img);
     const GLuint gl_tex = img->gl.tex[0];
     SOKOL_ASSERT(gl_tex);
+    const GLuint gl_target = img->gl.target;
+    SOKOL_ASSERT(gl_target);
     const int mip_level = cmn_att->mip_level;
     const int slice = cmn_att->slice;
     switch (img->cmn.type) {
         case SG_IMAGETYPE_2D:
-            glFramebufferTexture2D(GL_FRAMEBUFFER, gl_att_type, GL_TEXTURE_2D, gl_tex, mip_level);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, gl_att_type, gl_target, gl_tex, mip_level);
             break;
         case SG_IMAGETYPE_CUBE:
             glFramebufferTexture2D(GL_FRAMEBUFFER, gl_att_type, _sg_gl_cubeface_target(slice), gl_tex, mip_level);
@@ -7719,6 +7733,12 @@ _SOKOL_PRIVATE void _sg_gl_begin_pass(_sg_pass_t* pass, const sg_pass_action* ac
         #if defined(SOKOL_GLCORE33)
         glDisable(GL_FRAMEBUFFER_SRGB);
         #endif
+        if (_sg.desc.context.gl.default_framebuffer_userdata_cb) {
+            _sg.gl.cur_context->default_framebuffer = _sg.desc.context.gl.default_framebuffer_userdata_cb(_sg.desc.context.gl.user_data);
+        } else if (_sg.desc.context.gl.default_framebuffer_cb) {
+            _sg.gl.cur_context->default_framebuffer = _sg.desc.context.gl.default_framebuffer_cb();
+        }
+
         glBindFramebuffer(GL_FRAMEBUFFER, _sg.gl.cur_context->default_framebuffer);
     }
     glViewport(0, 0, w, h);
@@ -10266,12 +10286,13 @@ _SOKOL_PRIVATE MTLStoreAction _sg_mtl_store_action(sg_store_action a, bool resol
 
 _SOKOL_PRIVATE MTLResourceOptions _sg_mtl_resource_options_storage_mode_managed_or_shared(void) {
     #if defined(_SG_TARGET_MACOS)
-    if (_sg.mtl.force_managed_storage_mode || !_sg.mtl.has_unified_memory) {
-        return MTLResourceStorageModeManaged;
-    } else {
+    if (_sg.mtl.use_shared_storage_mode) {
         return MTLResourceStorageModeShared;
+    } else {
+        return MTLResourceStorageModeManaged;
     }
     #else
+        // MTLResourceStorageModeManaged is not even defined on iOS SDK
         return MTLResourceStorageModeShared;
     #endif
 }
@@ -10733,16 +10754,20 @@ _SOKOL_PRIVATE void _sg_mtl_init_caps(void) {
     _sg.features.mrt_independent_write_mask = true;
 
     _sg.features.image_clamp_to_border = false;
+    #if (MAC_OS_X_VERSION_MAX_ALLOWED >= 120000) || (__IPHONE_OS_VERSION_MAX_ALLOWED >= 140000)
     if (@available(macOS 12.0, iOS 14.0, *)) {
         _sg.features.image_clamp_to_border = [_sg.mtl.device supportsFamily:MTLGPUFamilyApple7]
                                              || [_sg.mtl.device supportsFamily:MTLGPUFamilyApple8]
                                              || [_sg.mtl.device supportsFamily:MTLGPUFamilyMac2];
+        #if (MAC_OS_X_VERSION_MAX_ALLOWED >= 130000) || (__IPHONE_OS_VERSION_MAX_ALLOWED >= 160000)
         if (!_sg.features.image_clamp_to_border) {
             if (@available(macOS 13.0, iOS 16.0, *)) {
                 _sg.features.image_clamp_to_border = [_sg.mtl.device supportsFamily:MTLGPUFamilyMetal3];
             }
         }
+        #endif
     }
+    #endif
 
     #if defined(_SG_TARGET_MACOS)
         _sg.limits.max_image_size_2d = 16 * 1024;
@@ -10883,22 +10908,35 @@ _SOKOL_PRIVATE void _sg_mtl_setup_backend(const sg_desc* desc) {
     _sg.mtl.sem = dispatch_semaphore_create(SG_NUM_INFLIGHT_FRAMES);
     _sg.mtl.device = (__bridge id<MTLDevice>) desc->context.metal.device;
     _sg.mtl.cmd_queue = [_sg.mtl.device newCommandQueue];
+
     for (int i = 0; i < SG_NUM_INFLIGHT_FRAMES; i++) {
         _sg.mtl.uniform_buffers[i] = [_sg.mtl.device
             newBufferWithLength:(NSUInteger)_sg.mtl.ub_size
             options:MTLResourceCPUCacheModeWriteCombined|MTLResourceStorageModeShared
         ];
-    }
-    if (@available(macOS 10.15, iOS 13.0, *)) {
-        _sg.mtl.has_unified_memory = _sg.mtl.device.hasUnifiedMemory;
-    } else {
-        #if defined(_SG_TARGET_MACOS)
-            _sg.mtl.has_unified_memory = false;
-        #else
-            _sg.mtl.has_unified_memory = true;
+        #if defined(SOKOL_DEBUG)
+            _sg.mtl.uniform_buffers[i].label = [NSString stringWithFormat:@"sg-uniform-buffer.%d", i];
         #endif
     }
-    _sg.mtl.force_managed_storage_mode = desc->mtl_force_managed_storage_mode;
+
+    if (desc->mtl_force_managed_storage_mode) {
+        _sg.mtl.use_shared_storage_mode = false;
+    } else if (@available(macOS 10.15, iOS 13.0, *)) {
+        // on Intel Macs, always use managed resources even though the
+        // device says it supports unified memory (because of texture restrictions)
+        const bool is_apple_gpu = [_sg.mtl.device supportsFamily:MTLGPUFamilyApple1];
+        if (!is_apple_gpu) {
+            _sg.mtl.use_shared_storage_mode = false;
+        } else {
+            _sg.mtl.use_shared_storage_mode = true;
+        }
+    } else {
+        #if defined(_SG_TARGET_MACOS)
+            _sg.mtl.use_shared_storage_mode = false;
+        #else
+            _sg.mtl.use_shared_storage_mode = true;
+        #endif
+    }
     _sg_mtl_init_caps();
 }
 
@@ -10982,7 +11020,16 @@ _SOKOL_PRIVATE sg_resource_state _sg_mtl_create_buffer(_sg_buffer_t* buf, const 
             } else {
                 mtl_buf = [_sg.mtl.device newBufferWithLength:(NSUInteger)buf->cmn.size options:mtl_options];
             }
+            if (nil == mtl_buf) {
+                _SG_ERROR(METAL_CREATE_BUFFER_FAILED);
+                return SG_RESOURCESTATE_FAILED;
+            }
         }
+        #if defined(SOKOL_DEBUG)
+            if (desc->label) {
+                mtl_buf.label = [NSString stringWithFormat:@"%s.%d", desc->label, slot];
+            }
+        #endif
         buf->mtl.buf[slot] = _sg_mtl_add_resource(mtl_buf);
         _SG_OBJC_RELEASE(mtl_buf);
     }
@@ -11122,10 +11169,20 @@ _SOKOL_PRIVATE sg_resource_state _sg_mtl_create_image(_sg_image_t* img, const sg
             mtl_tex = (__bridge id<MTLTexture>) desc->mtl_textures[slot];
         } else {
             mtl_tex = [_sg.mtl.device newTextureWithDescriptor:mtl_desc];
+            if (nil == mtl_tex) {
+                _SG_OBJC_RELEASE(mtl_desc);
+                _SG_ERROR(METAL_CREATE_TEXTURE_FAILED);
+                return SG_RESOURCESTATE_FAILED;
+            }
             if ((img->cmn.usage == SG_USAGE_IMMUTABLE) && !img->cmn.render_target) {
                 _sg_mtl_copy_image_data(img, mtl_tex, &desc->data);
             }
         }
+        #if defined(SOKOL_DEBUG)
+            if (desc->label) {
+                mtl_tex.label = [NSString stringWithFormat:@"%s.%d", desc->label, slot];
+            }
+        #endif
         img->mtl.tex[slot] = _sg_mtl_add_resource(mtl_tex);
         _SG_OBJC_RELEASE(mtl_tex);
     }
@@ -11167,8 +11224,17 @@ _SOKOL_PRIVATE sg_resource_state _sg_mtl_create_sampler(_sg_sampler_t* smp, cons
         mtl_desc.maxAnisotropy = desc->max_anisotropy;
         mtl_desc.normalizedCoordinates = YES;
         mtl_desc.compareFunction = _sg_mtl_compare_func(desc->compare);
+        #if defined(SOKOL_DEBUG)
+            if (desc->label) {
+                mtl_desc.label = [NSString stringWithUTF8String:desc->label];
+            }
+        #endif
         mtl_smp = [_sg.mtl.device newSamplerStateWithDescriptor:mtl_desc];
         _SG_OBJC_RELEASE(mtl_desc);
+        if (nil == mtl_smp) {
+            _SG_ERROR(METAL_CREATE_SAMPLER_FAILED);
+            return SG_RESOURCESTATE_FAILED;
+        }
     }
     smp->mtl.sampler_state = _sg_mtl_add_resource(mtl_smp);
     _SG_OBJC_RELEASE(mtl_smp);
@@ -11246,6 +11312,12 @@ _SOKOL_PRIVATE sg_resource_state _sg_mtl_create_shader(_sg_shader_t* shd, const 
         _SG_ERROR(METAL_FRAGMENT_SHADER_ENTRY_NOT_FOUND);
         goto failed;
     }
+    #if defined(SOKOL_DEBUG)
+        if (desc->label) {
+            vs_lib.label = [NSString stringWithFormat:@"%s.vs", desc->label];
+            fs_lib.label = [NSString stringWithFormat:@"%s.fs", desc->label];
+        }
+    #endif
     // it is legal to call _sg_mtl_add_resource with a nil value, this will return a special 0xFFFFFFFF index
     shd->mtl.stage[SG_SHADERSTAGE_VS].mtl_lib  = _sg_mtl_add_resource(vs_lib);
     _SG_OBJC_RELEASE(vs_lib);
@@ -11361,6 +11433,11 @@ _SOKOL_PRIVATE sg_resource_state _sg_mtl_create_pipeline(_sg_pipeline_t* pip, _s
         rp_desc.colorAttachments[i].sourceAlphaBlendFactor = _sg_mtl_blend_factor(cs->blend.src_factor_alpha);
         rp_desc.colorAttachments[i].sourceRGBBlendFactor = _sg_mtl_blend_factor(cs->blend.src_factor_rgb);
     }
+    #if defined(SOKOL_DEBUG)
+        if (desc->label) {
+            rp_desc.label = [NSString stringWithFormat:@"%s", desc->label];
+        }
+    #endif
     NSError* err = NULL;
     id<MTLRenderPipelineState> mtl_rps = [_sg.mtl.device newRenderPipelineStateWithDescriptor:rp_desc error:&err];
     _SG_OBJC_RELEASE(rp_desc);
@@ -11370,6 +11447,8 @@ _SOKOL_PRIVATE sg_resource_state _sg_mtl_create_pipeline(_sg_pipeline_t* pip, _s
         _SG_LOGMSG(METAL_CREATE_RPS_OUTPUT, [err.localizedDescription UTF8String]);
         return SG_RESOURCESTATE_FAILED;
     }
+    pip->mtl.rps = _sg_mtl_add_resource(mtl_rps);
+    _SG_OBJC_RELEASE(mtl_rps);
 
     // depth-stencil-state
     MTLDepthStencilDescriptor* ds_desc = [[MTLDepthStencilDescriptor alloc] init];
@@ -11393,11 +11472,17 @@ _SOKOL_PRIVATE sg_resource_state _sg_mtl_create_pipeline(_sg_pipeline_t* pip, _s
         ds_desc.frontFaceStencil.readMask = desc->stencil.read_mask;
         ds_desc.frontFaceStencil.writeMask = desc->stencil.write_mask;
     }
-    // FIXME: can this actually fail?
+    #if defined(SOKOL_DEBUG)
+        if (desc->label) {
+            ds_desc.label = [NSString stringWithFormat:@"%s.dss", desc->label];
+        }
+    #endif
     id<MTLDepthStencilState> mtl_dss = [_sg.mtl.device newDepthStencilStateWithDescriptor:ds_desc];
     _SG_OBJC_RELEASE(ds_desc);
-    pip->mtl.rps = _sg_mtl_add_resource(mtl_rps);
-    _SG_OBJC_RELEASE(mtl_rps);
+    if (nil == mtl_dss) {
+        _SG_ERROR(METAL_CREATE_DSS_FAILED);
+        return SG_RESOURCESTATE_FAILED;
+    }
     pip->mtl.dss = _sg_mtl_add_resource(mtl_dss);
     _SG_OBJC_RELEASE(mtl_dss);
     return SG_RESOURCESTATE_VALID;
@@ -11929,6 +12014,19 @@ _SOKOL_PRIVATE void _sg_mtl_update_image(_sg_image_t* img, const sg_image_data* 
     }
     __unsafe_unretained id<MTLTexture> mtl_tex = _sg_mtl_id(img->mtl.tex[img->cmn.active_slot]);
     _sg_mtl_copy_image_data(img, mtl_tex, data);
+}
+
+_SOKOL_PRIVATE void _sg_mtl_push_debug_group(const char* name) {
+    SOKOL_ASSERT(name);
+    if (_sg.mtl.cmd_encoder) {
+        [_sg.mtl.cmd_encoder pushDebugGroup:[NSString stringWithUTF8String:name]];
+    }
+}
+
+_SOKOL_PRIVATE void _sg_mtl_pop_debug_group(void) {
+    if (_sg.mtl.cmd_encoder) {
+        [_sg.mtl.cmd_encoder popDebugGroup];
+    }
 }
 
 // ██     ██ ███████ ██████   ██████  ██████  ██    ██     ██████   █████   ██████ ██   ██ ███████ ███    ██ ██████
@@ -14160,6 +14258,20 @@ static inline void _sg_update_image(_sg_image_t* img, const sg_image_data* data)
     #endif
 }
 
+static inline void _sg_push_debug_group(const char* name) {
+    #if defined(SOKOL_METAL)
+    _sg_mtl_push_debug_group(name);
+    #else
+    _SOKOL_UNUSED(name);
+    #endif
+}
+
+static inline void _sg_pop_debug_group(void) {
+    #if defined(SOKOL_METAL)
+    _sg_mtl_pop_debug_group();
+    #endif
+}
+
 // ██████   ██████   ██████  ██
 // ██   ██ ██    ██ ██    ██ ██
 // ██████  ██    ██ ██    ██ ██
@@ -15285,7 +15397,7 @@ _SOKOL_PRIVATE bool _sg_validate_apply_uniforms(sg_shader_stage stage_index, int
         const _sg_shader_stage_t* stage = &pip->shader->cmn.stage[stage_index];
         _SG_VALIDATE(ub_index < stage->num_uniform_blocks, VALIDATE_AUB_NO_UB_AT_SLOT);
 
-        // check that the provided data size doesn't exceed the uniform block size
+        // check that the provided data size matches the uniform block size
         _SG_VALIDATE(data->size == stage->uniform_blocks[ub_index].size, VALIDATE_AUB_SIZE);
 
         return _sg_validate_end();
@@ -15947,7 +16059,7 @@ _SOKOL_PRIVATE sg_desc _sg_desc_defaults(const sg_desc* desc) {
 SOKOL_API_IMPL void sg_setup(const sg_desc* desc) {
     SOKOL_ASSERT(desc);
     SOKOL_ASSERT((desc->_start_canary == 0) && (desc->_end_canary == 0));
-    SOKOL_ASSERT((desc->allocator.alloc && desc->allocator.free) || (!desc->allocator.alloc && !desc->allocator.free));
+    SOKOL_ASSERT((desc->allocator.alloc_fn && desc->allocator.free_fn) || (!desc->allocator.alloc_fn && !desc->allocator.free_fn));
     _SG_CLEAR_ARC_STRUCT(_sg_state_t, _sg);
     _sg.desc = _sg_desc_defaults(desc);
     _sg_setup_pools(&_sg.pools, &_sg.desc);
@@ -17002,12 +17114,13 @@ SOKOL_API_IMPL void sg_update_image(sg_image img_id, const sg_image_data* data) 
 SOKOL_API_IMPL void sg_push_debug_group(const char* name) {
     SOKOL_ASSERT(_sg.valid);
     SOKOL_ASSERT(name);
-    _SOKOL_UNUSED(name);
+    _sg_push_debug_group(name);
     _SG_TRACE_ARGS(push_debug_group, name);
 }
 
 SOKOL_API_IMPL void sg_pop_debug_group(void) {
     SOKOL_ASSERT(_sg.valid);
+    _sg_pop_debug_group();
     _SG_TRACE_NOARGS(pop_debug_group);
 }
 
